@@ -314,6 +314,9 @@ def default_project(name="Untitled"):
         "compRatio": 5.0,
         "compRelease": 0.18,
         "limiter": True,
+        # Everything random in the audio engine draws from this seed, so the
+        # same project always renders to the same audio.
+        "seed": 1,
         "tracks": tracks,
         "patterns": [empty_pattern("A", tracks)],
         "current": 0,

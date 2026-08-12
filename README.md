@@ -9,7 +9,7 @@ modern browser).
 ```
 ┌──────────────┐   stdio JSON-RPC   ┌──────────────────┐   SSE + fetch   ┌───────────┐
 │ Claude Code  │ ◀────────────────▶ │  beatforge.py    │ ◀─────────────▶ │  browser  │
-│ (19 MCP      │                    │  one process,    │                 │  Web Audio│
+│ (21 MCP      │                    │  one process,    │                 │  Web Audio│
 │  tools)      │                    │  one shared state│                 │  engine   │
 └──────────────┘                    └──────────────────┘                 └───────────┘
 ```
@@ -68,11 +68,17 @@ to stderr and returned by the `bf_ui` tool.
 | **right-click** | erase |
 | **space** | play / stop |
 | **1–9** | jump to pattern |
+| **ctrl/⌘+Z** | undo · **shift** to redo — walks back anything you *or* Claude changed |
 | double-click a track name | audition it |
 
 The left column is the mixer (mute, solo, volume, pan). The right panel is the
 **inspector**: swap the synth engine and tweak its parameters — every drum and
 instrument is a synth, so a kick can become an 808, a hat can become a ride.
+**DUCK** sets how far the kick sidechains that track on every hit.
+
+The header's **COMP** / **RATIO** / **LIMIT** control the master bus. The
+defaults level hard; raise COMP or drop RATIO when a mix needs to keep its
+dynamics — a heavy master compressor will otherwise undo the sidechain pump.
 
 Patterns are 8–64 steps. Chain them into a song with **+CHAIN**, tick **SONG**,
 and the transport plays the arrangement instead of looping one pattern.
@@ -104,6 +110,8 @@ and the transport plays the arrangement instead of looping one pattern.
 | `bf_music_reference` | Scale notes and chord spellings |
 | `bf_project_io` | Save / load / list projects |
 | `bf_export_audio` | Render a WAV to disk (the browser does the rendering) |
+| `bf_export_midi` | Write a .mid for a DAW — no browser needed, returns immediately |
+| `bf_undo` | Walk the whole project back (or forward) through its edit history |
 | `bf_ui` | Is a browser connected, and where |
 
 ### Step grammar
@@ -149,7 +157,8 @@ beatforge.py          entry point (--mcp for Claude, plain for you)
 bf/state.py           project model, step/note grammar, autosave
 bf/theory.py          scales, chords, progressions
 bf/generators.py      genre grooves, basslines, melodies
-bf/tools.py           the 19 MCP tools
+bf/midi.py            Standard MIDI File writer
+bf/tools.py           the 21 MCP tools
 bf/mcp.py             MCP stdio JSON-RPC server
 bf/web.py             HTTP + SSE server
 web/                  the studio UI (audio.js is the whole synth engine)
@@ -162,7 +171,13 @@ the tab or restarting the server never loses work.
 
 ## Notes
 
-- Export needs the browser tab open and **not** minimised — background tabs
-  throttle audio rendering, and the export tool will tell you if that happens.
+- **WAV** export needs the browser tab open and **not** minimised — background
+  tabs throttle audio rendering, and the export tool will tell you if that
+  happens. **MIDI** export is pure Python and needs no browser at all.
 - The master bus has a compressor and a soft limiter, so exports don't clip.
+  Both are project settings now — see COMP / RATIO / LIMIT above.
+- Every edit goes through one undo history, so anything Claude writes can be
+  walked back with ctrl+Z or `bf_undo`.
+- The audio engine's randomness runs off the project `seed`, so the same
+  project always renders the same audio. Change the seed to reroll.
 - Everything is synthesis, so a whole project file is a few KB of JSON.

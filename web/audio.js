@@ -11,6 +11,24 @@
 
   function mtof(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 
+  /* Seeded PRNG (mulberry32). Everything random in the engine draws from this
+     stream -- noise playback rate, the reverb impulse, step probability -- and
+     the stream is reseeded from the project at the top of every render and
+     every play, so the same project and seed always render the same audio.
+     Renders match to within 1 LSB of 16-bit; the last bit is float rounding
+     inside the browser's graph, not our randomness. */
+  var rngState = 1;
+  function seedRng(seed) {
+    rngState = (seed == null ? 1 : seed >>> 0) || 1;
+  }
+  function rnd() {
+    rngState = (rngState + 0x6D2B79F5) >>> 0;
+    var t = rngState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
   // ---- shared per-context resources ---------------------------------------
   var noiseCache = new WeakMap();
   function noiseBuffer(ctx) {
@@ -32,7 +50,7 @@
     var src = ctx.createBufferSource();
     src.buffer = noiseBuffer(ctx);
     src.loop = true;
-    src.playbackRate.value = 0.85 + Math.random() * 0.3;
+    src.playbackRate.value = 0.85 + rnd() * 0.3;
     return src;
   }
 
@@ -89,7 +107,7 @@
     for (var c = 0; c < 2; c++) {
       var d = buf.getChannelData(c);
       for (var i = 0; i < len; i++) {
-        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+        d[i] = (rnd() * 2 - 1) * Math.pow(1 - i / len, decay);
       }
     }
     return buf;
@@ -545,7 +563,7 @@
       if (!row) continue;
       var step = row[index];
       if (!step) continue;
-      if (step.prob != null && Math.random() > step.prob) continue;
+      if (step.prob != null && rnd() > step.prob) continue;
 
       var t = time;
       if (index % 2 === 1) t += swing * sd * 0.5;
@@ -607,6 +625,7 @@
     }
     var AC = global.AudioContext || global.webkitAudioContext;
     this.ctx = new AC();
+    seedRng(this.state && this.state.seed);
     this.graph = buildGraph(this.ctx, this.state);
     this.rebuildChains();
     return this.ctx;
@@ -662,6 +681,7 @@
   Engine.prototype.play = function () {
     if (this.playing) return;
     this.ensure();
+    seedRng(this.state && this.state.seed);
     this.playing = true;
     this.step = 0;
     this.songIndex = 0;
@@ -726,6 +746,7 @@
   // ---- offline render ------------------------------------------------------
   Engine.prototype.render = function (opts) {
     var state = JSON.parse(JSON.stringify(this.state));
+    seedRng(state.seed);
     var sd = stepDur(state.bpm);
     var seq = [];   // [{pattern, step}] in play order
 

@@ -14,7 +14,7 @@ import re
 import threading
 import time
 
-from . import generators, theory
+from . import generators, midi, theory
 from .state import (ALL_ENGINES, DRUM_ENGINES, MELODIC_ENGINES, engine_kind,
                     format_steps, midi_to_note, note_to_midi, parse_notes,
                     parse_steps, slugify, default_project, migrate, empty_pattern)
@@ -250,6 +250,10 @@ TOOLS = [
                                  "description": "Master compressor release in seconds."},
                 "limiter": {"type": "boolean",
                             "description": "Master soft limiter. On by default; turn it off to hear true peaks."},
+                "seed": {"type": "integer", "minimum": 0,
+                         "description": "Random seed for the audio engine. The same project and seed "
+                                        "always render identically; change it to reroll probability "
+                                        "steps and noise character."},
             },
         },
     },
@@ -556,6 +560,19 @@ TOOLS = [
         },
     },
     {
+        "name": "bf_export_midi",
+        "description": "Write the current pattern or the whole song to a .mid file on disk, ready to "
+                       "drop into a DAW. Unlike bf_export_audio this needs no browser and returns "
+                       "immediately -- drums land on GM channel 10, melodic tracks keep their pitches.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "Without extension. Defaults to the project name."},
+                "song": {"type": "boolean", "default": False, "description": "Write the song chain instead of one pattern."},
+            },
+        },
+    },
+    {
         "name": "bf_ui",
         "description": "Check whether the BeatForge browser UI is connected, and get its URL.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -676,6 +693,9 @@ class ToolRunner(object):
             if a.get("limiter") is not None:
                 data["limiter"] = bool(a["limiter"])
                 changed.append("limiter=%s" % data["limiter"])
+            if a.get("seed") is not None:
+                data["seed"] = max(0, int(a["seed"]))
+                changed.append("seed=%d" % data["seed"])
             if a.get("playing") is not None:
                 data["playing"] = bool(a["playing"])
                 changed.append("playing=%s" % data["playing"])
@@ -1183,6 +1203,22 @@ class ToolRunner(object):
         if info.get("error"):
             raise ValueError("browser reported: %s" % info["error"])
         return "exported %s (%.1f KB)" % (info["path"], info.get("bytes", 0) / 1024.0)
+
+    def _bf_export_midi(self, a):
+        data = self.proj.snapshot()
+        name = a.get("filename") or data["name"]
+        safe = re.sub(r"[^A-Za-z0-9 _-]", "_", str(name)).strip() or "beatforge"
+        out_dir = os.path.join(self.root, "exports")
+        if not os.path.isdir(out_dir):
+            os.makedirs(out_dir)
+        path = os.path.join(out_dir, "%s.mid" % safe)
+        n = 2
+        while os.path.exists(path):
+            path = os.path.join(out_dir, "%s-%d.mid" % (safe, n))
+            n += 1
+        tracks, notes = midi.write(data, path, song=bool(a.get("song", False)))
+        return "wrote %s -- %d tracks, %d notes, %.1f KB" % (
+            path, tracks, notes, os.path.getsize(path) / 1024.0)
 
 
 def _ensure_melodic(data, tid, engine, label):

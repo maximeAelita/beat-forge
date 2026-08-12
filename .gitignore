@@ -2,4 +2,5 @@ __pycache__/
 *.pyc
 projects/_autosave.json
 exports/*.wav
+exports/*.mid
 .DS_Store
