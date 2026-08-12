@@ -193,9 +193,15 @@
 
       var metal = Math.max(0, Math.min(1, p.metal == null ? 0.5 : p.metal));
       var mg = ctx.createGain(); mg.gain.value = metal; mg.connect(bp);
+      /* Bright tunings push the upper ratios past Nyquist, where they all clamp
+         to the same frequency -- inaudible, but they still cost an oscillator
+         per hit and flood the console. Skip the ones that will not fit. */
+      var nyquist = ctx.sampleRate / 2;
       ratios.forEach(function (r) {
+        var freq = base * r * 8;
+        if (freq >= nyquist) return;
         var o = ctx.createOscillator();
-        o.type = 'square'; o.frequency.value = base * r * 8;
+        o.type = 'square'; o.frequency.value = freq;
         o.connect(mg); o.start(t); o.stop(t + decay + 0.05);
       });
       var n = noise(ctx), ng = ctx.createGain();
@@ -400,16 +406,33 @@
     'keys', 'pad', 'bell', 'organ'];
 
   // ---- graph ---------------------------------------------------------------
-  function buildGraph(ctx, master) {
+  /* Master bus settings live on the project so a mix can keep its dynamics.
+     Missing fields fall back to what the engine used to hardcode. */
+  function masterSettings(state) {
+    state = state || {};
+    return {
+      gain: state.masterGain == null ? 0.85 : state.masterGain,
+      threshold: state.compThreshold == null ? -14 : state.compThreshold,
+      ratio: state.compRatio == null ? 5 : state.compRatio,
+      release: state.compRelease == null ? 0.18 : state.compRelease,
+      limiter: state.limiter === undefined ? true : !!state.limiter
+    };
+  }
+
+  function buildGraph(ctx, state) {
+    var m = masterSettings(state);
     var out = ctx.createGain();
-    out.gain.value = master == null ? 0.85 : master;
+    out.gain.value = m.gain;
 
     var comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -14; comp.knee.value = 14;
-    comp.ratio.value = 5; comp.attack.value = 0.004; comp.release.value = 0.18;
+    comp.threshold.value = m.threshold; comp.knee.value = 14;
+    comp.ratio.value = m.ratio; comp.attack.value = 0.004;
+    comp.release.value = m.release;
 
+    /* A WaveShaper with a null curve is a straight pass-through, so the
+       limiter can be switched off without rebuilding the graph. */
     var limiter = ctx.createWaveShaper();
-    limiter.curve = softLimit();
+    limiter.curve = m.limiter ? softLimit() : null;
     limiter.oversample = '2x';
 
     var analyser = null;
@@ -437,7 +460,8 @@
     delay.connect(dampen); dampen.connect(fb); fb.connect(delay);
     dampen.connect(dryOut); dryOut.connect(out);
 
-    return { out: out, reverb: reverb, delay: delay, analyser: analyser, master: out };
+    return { out: out, reverb: reverb, delay: delay, analyser: analyser, master: out,
+             comp: comp, limiter: limiter, ducks: {} };
   }
 
   function trackChain(ctx, graph, track) {
@@ -448,6 +472,15 @@
       var pan = ctx.createStereoPanner();
       pan.pan.value = Math.max(-1, Math.min(1, track.pan || 0));
       g.connect(pan); node = pan;
+    }
+    /* Sidechain: a gain node the kick pulls down on every hit. It sits ahead of
+       the sends so the reverb and delay tails pump with the dry signal. */
+    if (track.duck > 0.001) {
+      var duck = ctx.createGain();
+      duck.gain.value = 1;
+      node.connect(duck);
+      node = duck;
+      graph.ducks[track.id] = { node: duck, amount: Math.min(1, track.duck) };
     }
     node.connect(graph.out);
     if (track.reverb > 0.001) {
@@ -487,6 +520,20 @@
     setTimeout(function () { try { node.disconnect(); } catch (e) { } }, ms);
   }
 
+  /* Pull every ducking track down at `t` and let it climb back over `release`.
+     Called once per hit on the duck source track (the kick, by default). */
+  function fireDuck(graph, state, t) {
+    var release = state.duckRelease == null ? 0.18 : state.duckRelease;
+    for (var id in graph.ducks) {
+      if (!graph.ducks.hasOwnProperty(id)) continue;
+      var d = graph.ducks[id];
+      var floor = Math.max(0.02, 1 - d.amount);
+      d.node.gain.cancelScheduledValues(t);
+      d.node.gain.setValueAtTime(floor, t);
+      d.node.gain.linearRampToValueAtTime(1, t + release);
+    }
+  }
+
   /* Schedule one step of one pattern. `chains` maps track id -> input node. */
   function scheduleStep(ctx, graph, state, chains, pattern, index, time, lastNote) {
     var sd = stepDur(state.bpm);
@@ -507,6 +554,7 @@
 
       var dest = chains[track.id];
       if (!dest) continue;
+      if (track.id === (state.duckSource || 'kick')) fireDuck(graph, state, t);
       var voice = Voices[track.engine] || Voices.perc;
       var isMelodic = MELODIC.indexOf(track.engine) >= 0;
       var dur = (step.len || 1) * sd;
@@ -559,7 +607,7 @@
     }
     var AC = global.AudioContext || global.webkitAudioContext;
     this.ctx = new AC();
-    this.graph = buildGraph(this.ctx, this.state ? this.state.masterGain : 0.85);
+    this.graph = buildGraph(this.ctx, this.state);
     this.rebuildChains();
     return this.ctx;
   };
@@ -568,6 +616,7 @@
     if (!this.ctx || !this.state) return;
     var self = this;
     this.chains = {};
+    this.graph.ducks = {};
     this.state.tracks.forEach(function (t) {
       self.chains[t.id] = trackChain(self.ctx, self.graph, t);
     });
@@ -578,11 +627,17 @@
       this.state.tracks.length !== state.tracks.length ||
       this.state.tracks.some(function (t, i) {
         var o = state.tracks[i];
-        return !o || o.id !== t.id || o.reverb !== t.reverb || o.delay !== t.delay;
+        return !o || o.id !== t.id || o.reverb !== t.reverb || o.delay !== t.delay ||
+          o.duck !== t.duck;
       });
     this.state = state;
     if (this.ctx) {
-      this.graph.out.gain.setTargetAtTime(state.masterGain, this.ctx.currentTime, 0.02);
+      var m = masterSettings(state);
+      this.graph.out.gain.setTargetAtTime(m.gain, this.ctx.currentTime, 0.02);
+      this.graph.comp.threshold.value = m.threshold;
+      this.graph.comp.ratio.value = m.ratio;
+      this.graph.comp.release.value = m.release;
+      this.graph.limiter.curve = m.limiter ? softLimit() : null;
       if (structural) {
         this.rebuildChains();
       } else {
@@ -695,7 +750,7 @@
     var OAC = global.OfflineAudioContext || global.webkitOfflineAudioContext;
     var ctx = new OAC(2, Math.ceil(duration * rate), rate);
     ctx.__bfOffline = true;
-    var graph = buildGraph(ctx, state.masterGain);
+    var graph = buildGraph(ctx, state);
     var chains = {};
     state.tracks.forEach(function (t) { chains[t.id] = trackChain(ctx, graph, t); });
 

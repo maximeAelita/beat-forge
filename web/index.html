@@ -35,6 +35,16 @@
   <label class="knob wide"><span>MASTER</span>
     <input id="master" type="range" min="0" max="1.2" step="0.01" value="0.85">
   </label>
+  <span class="sep"></span>
+  <label class="knob wide" title="Master compressor threshold — raise it to keep dynamics"><span>COMP</span>
+    <input id="comp-threshold" type="range" min="-40" max="0" step="1" value="-14">
+    <em id="comp-threshold-val">-14dB</em>
+  </label>
+  <label class="knob wide" title="Master compression ratio — 1 is off"><span>RATIO</span>
+    <input id="comp-ratio" type="range" min="1" max="12" step="0.5" value="5">
+    <em id="comp-ratio-val">5:1</em>
+  </label>
+  <label class="check" title="Master soft limiter"><input id="limiter" type="checkbox" checked> LIMIT</label>
   <label class="knob"><span>KEY</span>
     <select id="key"></select>
   </label>

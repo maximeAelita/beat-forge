@@ -94,6 +94,11 @@
     $('swing').value = S.swing;
     $('swing-val').textContent = Math.round(S.swing * 100) + '%';
     $('master').value = S.masterGain;
+    $('comp-threshold').value = S.compThreshold;
+    $('comp-threshold-val').textContent = Math.round(S.compThreshold) + 'dB';
+    $('comp-ratio').value = S.compRatio;
+    $('comp-ratio-val').textContent = S.compRatio + ':1';
+    $('limiter').checked = S.limiter !== false;
     $('proj-name').value = S.name;
     $('song-mode').checked = !!S.songMode;
     $('pat-steps').value = String(pattern().steps);
@@ -381,8 +386,9 @@
     };
     host.appendChild(labelled('ENGINE', sel));
 
-    [['gain', 0, 1.2], ['pan', -1, 1], ['reverb', 0, 1], ['delay', 0, 1]].forEach(function (spec) {
-      host.appendChild(slider(spec[0].toUpperCase(), t[spec[0]], spec[1], spec[2], 0.01,
+    [['gain', 0, 1.2], ['pan', -1, 1], ['reverb', 0, 1], ['delay', 0, 1],
+     ['duck', 0, 1]].forEach(function (spec) {
+      host.appendChild(slider(spec[0].toUpperCase(), t[spec[0]] || 0, spec[1], spec[2], 0.01,
         function (v) {
           t[spec[0]] = v;
           if (spec[0] === 'gain') engine.setState(S); else engine.rebuildChains();
@@ -553,6 +559,19 @@
       S.swing = parseFloat($('swing').value);
       $('swing-val').textContent = Math.round(S.swing * 100) + '%'; push();
     };
+    $('comp-threshold').oninput = function () {
+      S.compThreshold = parseFloat($('comp-threshold').value);
+      $('comp-threshold-val').textContent = Math.round(S.compThreshold) + 'dB';
+      engine.setState(S); push();
+    };
+    $('comp-ratio').oninput = function () {
+      S.compRatio = parseFloat($('comp-ratio').value);
+      $('comp-ratio-val').textContent = S.compRatio + ':1';
+      engine.setState(S); push();
+    };
+    $('limiter').onchange = function () {
+      S.limiter = $('limiter').checked; engine.setState(S); push();
+    };
     $('master').oninput = function () {
       S.masterGain = parseFloat($('master').value); engine.setState(S); push();
     };
@@ -613,7 +632,8 @@
       var defs = META.drumEngines.perc || {};
       var t = {
         id: id, name: 'Track ' + n, engine: 'perc', kind: 'drum', gain: 0.7, pan: 0,
-        mute: false, solo: false, reverb: 0, delay: 0, params: JSON.parse(JSON.stringify(defs))
+        mute: false, solo: false, reverb: 0, delay: 0, duck: 0,
+        params: JSON.parse(JSON.stringify(defs))
       };
       S.tracks.push(t);
       S.patterns.forEach(function (p) { p.grid[id] = new Array(p.steps).fill(null); });
@@ -628,6 +648,18 @@
     document.addEventListener('keydown', function (e) {
       var tag = (e.target.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        var back = !e.shiftKey;
+        fetch(back ? '/api/undo' : '/api/redo', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ steps: 1 })
+        }).then(function (r) { return r.json(); }).then(function (r) {
+          toast(r.applied ? (back ? 'undo' : 'redo') + ' — ' + r.undo + ' left'
+                          : 'nothing to ' + (back ? 'undo' : 'redo'));
+        });
+        return;
+      }
       if (e.code === 'Space') {
         e.preventDefault();
         $('btn-play').click();

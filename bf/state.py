@@ -14,6 +14,9 @@ import time
 
 VERSION = 1
 
+# How many past states undo can walk back through.
+HISTORY_LIMIT = 60
+
 # ---------------------------------------------------------------------------
 # Synth engines available in the browser audio engine (web/audio.js).
 # `params` lists the tweakable knobs and their default values.
@@ -265,6 +268,7 @@ def _track(tid, name, engine, gain=0.8, pan=0.0, **params):
         "solo": False,
         "reverb": 0.0,
         "delay": 0.0,
+        "duck": 0.0,
         "params": base,
     }
 
@@ -301,6 +305,15 @@ def default_project(name="Untitled"):
         "masterGain": 0.85,
         "key": "C",
         "scale": "minor",
+        "duckSource": "kick",
+        "duckRelease": 0.18,
+        # Master bus. The defaults are what the engine used to hardcode; loosen
+        # the compressor when a mix needs to keep its dynamics (sidechain pump,
+        # quiet intros) instead of being levelled flat.
+        "compThreshold": -14.0,
+        "compRatio": 5.0,
+        "compRelease": 0.18,
+        "limiter": True,
         "tracks": tracks,
         "patterns": [empty_pattern("A", tracks)],
         "current": 0,
@@ -324,6 +337,8 @@ class Project(object):
         self.autosave_path = autosave_path
         self._listeners = []
         self._pending_cmds = []
+        self._undo = []
+        self._redo = []
         if autosave_path and os.path.exists(autosave_path):
             try:
                 with open(autosave_path, "r") as fh:
@@ -365,13 +380,56 @@ class Project(object):
     def mutate(self, fn, origin=None):
         """Apply fn(data) under the lock, bump rev, notify listeners."""
         with self.lock:
+            before = copy.deepcopy(self.data)
             result = fn(self.data)
+            # Only remember mutations that actually changed something -- the UI
+            # posts the whole project on every click, most of which are no-ops.
+            if _sig(before) != _sig(self.data):
+                self._undo.append(before)
+                del self._undo[:-HISTORY_LIMIT]
+                self._redo = []
             self.data["rev"] = self.data.get("rev", 0) + 1
             self.data["mtime"] = time.time()
             payload = copy.deepcopy(self.data)
             self._broadcast("state", payload, exclude=origin)
             self._autosave()
         return result
+
+    # -- undo / redo --------------------------------------------------------
+    def _restore(self, src, dst):
+        """Pop one snapshot off `src`, pushing the current state onto `dst`."""
+        with self.lock:
+            if not src:
+                return None
+            dst.append(copy.deepcopy(self.data))
+            del dst[:-HISTORY_LIMIT]
+            rev = self.data.get("rev", 0)
+            self.data = src.pop()
+            self.data["rev"] = rev + 1          # revisions only ever go forward
+            self.data["mtime"] = time.time()
+            self._broadcast("state", copy.deepcopy(self.data))
+            self._autosave()
+            return self.data
+
+    def undo(self, steps=1):
+        n = 0
+        for _ in range(max(1, int(steps))):
+            if self._restore(self._undo, self._redo) is None:
+                break
+            n += 1
+        return n
+
+    def redo(self, steps=1):
+        n = 0
+        for _ in range(max(1, int(steps))):
+            if self._restore(self._redo, self._undo) is None:
+                break
+            n += 1
+        return n
+
+    def history_depth(self):
+        with self.lock:
+            return len(self._undo), len(self._redo)
 
     def _autosave(self):
         if not self.autosave_path:
@@ -420,7 +478,8 @@ def migrate(data):
         for key, val in ALL_ENGINES.get(t.get("engine", "kick"), {}).items():
             t["params"].setdefault(key, val)
         for key, val in (("gain", 0.8), ("pan", 0.0), ("mute", False),
-                         ("solo", False), ("reverb", 0.0), ("delay", 0.0)):
+                         ("solo", False), ("reverb", 0.0), ("delay", 0.0),
+                         ("duck", 0.0)):
             t.setdefault(key, val)
         known.add(t["id"])
     for p in data["patterns"]:
@@ -434,6 +493,16 @@ def migrate(data):
                 del grid[tid]
     data["current"] = max(0, min(int(data.get("current", 0)), len(data["patterns"]) - 1))
     return data
+
+
+_VOLATILE = ("rev", "mtime", "playing", "current")
+
+
+def _sig(data):
+    """Content fingerprint: ignores transport and view state, so hitting play
+    or switching pattern does not land on the undo stack."""
+    return json.dumps({k: v for k, v in data.items() if k not in _VOLATILE},
+                      sort_keys=True, separators=(",", ":"))
 
 
 def slugify(name, taken):

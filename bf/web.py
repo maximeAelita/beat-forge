@@ -123,6 +123,14 @@ def make_handler(project, root, quiet=True):
                 self._json({"ok": True, "rev": project.snapshot()["rev"]})
                 return
 
+            if path in ("/api/undo", "/api/redo"):
+                steps = int(body.get("steps") or 1)
+                n = (project.undo if path == "/api/undo" else project.redo)(steps)
+                undo_n, redo_n = project.history_depth()
+                self._json({"ok": True, "applied": n, "undo": undo_n, "redo": redo_n,
+                            "rev": project.snapshot()["rev"]})
+                return
+
             if path == "/api/export":
                 job = body.get("job")
                 if body.get("error"):

@@ -238,6 +238,18 @@ TOOLS = [
                 "pattern": {"description": "Select a pattern by index or name."},
                 "playing": {"type": "boolean", "description": "Start or stop the browser transport."},
                 "song_mode": {"type": "boolean", "description": "Play the song chain instead of looping one pattern."},
+                "duck_source": {"type": "string", "description": "Track id whose hits drive the sidechain (default 'kick')."},
+                "duck_release": {"type": "number", "minimum": 0.02, "maximum": 1.0,
+                                 "description": "Seconds for a ducked track to recover. 0.18 is a typical pump."},
+                "comp_threshold": {"type": "number", "minimum": -60, "maximum": 0,
+                                   "description": "Master compressor threshold in dB. -14 is the default and "
+                                                  "levels hard; go to -6 or lower ratio to keep dynamics."},
+                "comp_ratio": {"type": "number", "minimum": 1, "maximum": 20,
+                               "description": "Master compression ratio. 5 is the default; 1 is off."},
+                "comp_release": {"type": "number", "minimum": 0.01, "maximum": 1.0,
+                                 "description": "Master compressor release in seconds."},
+                "limiter": {"type": "boolean",
+                            "description": "Master soft limiter. On by default; turn it off to hear true peaks."},
             },
         },
     },
@@ -259,6 +271,9 @@ TOOLS = [
                 "solo": {"type": "boolean"},
                 "reverb": {"type": "number", "minimum": 0, "maximum": 1},
                 "delay": {"type": "number", "minimum": 0, "maximum": 1},
+                "duck": {"type": "number", "minimum": 0, "maximum": 1,
+                         "description": "Sidechain: how far the kick pushes this track "
+                                        "down on every hit. 0 off, 0.5 is a clear pump."},
                 "params": {"type": "object",
                            "description": "Engine knobs, e.g. {\"tune\": 46, \"decay\": 0.8, \"drive\": 0.4}."},
             },
@@ -545,6 +560,21 @@ TOOLS = [
         "description": "Check whether the BeatForge browser UI is connected, and get its URL.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "bf_undo",
+        "description": "Step the whole project back (or forward) through its edit history. "
+                       "Use this the moment a generated part is worse than what it replaced -- "
+                       "every tool that writes state can be walked back.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["undo", "redo", "depth"],
+                           "default": "undo"},
+                "steps": {"type": "integer", "minimum": 1, "default": 1,
+                          "description": "How many edits to walk back."},
+            },
+        },
+    },
 ]
 
 
@@ -583,6 +613,19 @@ class ToolRunner(object):
         return ("UI %s (%d connected client%s). Open %s in a browser."
                 % ("connected" if n else "NOT connected", n, "" if n == 1 else "s", self.url))
 
+    def _bf_undo(self, a):
+        action = a.get("action") or "undo"
+        if action == "depth":
+            u, r = self.proj.history_depth()
+            return "%d edit%s can be undone, %d redone." % (u, "" if u == 1 else "s", r)
+        steps = int(a.get("steps") or 1)
+        n = self.proj.undo(steps) if action == "undo" else self.proj.redo(steps)
+        u, r = self.proj.history_depth()
+        if not n:
+            return "nothing to %s." % action
+        return "%s %d edit%s (%d undo / %d redo left)." % (
+            "undid" if action == "undo" else "redid", n, "" if n == 1 else "s", u, r)
+
     # -- transport ----------------------------------------------------------
     def _bf_set_transport(self, a):
         changed = []
@@ -617,6 +660,22 @@ class ToolRunner(object):
             if a.get("song_mode") is not None:
                 data["songMode"] = bool(a["song_mode"])
                 changed.append("song_mode=%s" % data["songMode"])
+            if a.get("duck_source"):
+                self.proj.track(data, a["duck_source"])
+                data["duckSource"] = a["duck_source"]
+                changed.append("duck_source=%s" % data["duckSource"])
+            if a.get("duck_release") is not None:
+                data["duckRelease"] = max(0.02, min(1.0, float(a["duck_release"])))
+                changed.append("duck_release=%.2f" % data["duckRelease"])
+            for key, field, lo, hi in (("comp_threshold", "compThreshold", -60, 0),
+                                       ("comp_ratio", "compRatio", 1, 20),
+                                       ("comp_release", "compRelease", 0.01, 1.0)):
+                if a.get(key) is not None:
+                    data[field] = max(lo, min(hi, float(a[key])))
+                    changed.append("%s=%g" % (key, data[field]))
+            if a.get("limiter") is not None:
+                data["limiter"] = bool(a["limiter"])
+                changed.append("limiter=%s" % data["limiter"])
             if a.get("playing") is not None:
                 data["playing"] = bool(a["playing"])
                 changed.append("playing=%s" % data["playing"])
@@ -686,7 +745,8 @@ class ToolRunner(object):
                     t["name"] = a["name"]
                     bits.append("name")
                 for key, lo, hi in (("gain", 0, 1.5), ("pan", -1, 1),
-                                    ("reverb", 0, 1), ("delay", 0, 1)):
+                                    ("reverb", 0, 1), ("delay", 0, 1),
+                                    ("duck", 0, 1)):
                     if a.get(key) is not None:
                         t[key] = max(lo, min(hi, float(a[key])))
                         bits.append("%s=%.2f" % (key, t[key]))
