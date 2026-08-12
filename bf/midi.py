@@ -65,11 +65,21 @@ def _sequence(data, song):
     return seq
 
 
+def _is_drum(track):
+    """Follow how the track is actually used, not just its engine. A cowbell or
+    tom played as a melody is `kind: melodic` and must not land on channel 10,
+    where its pitches would trigger unrelated percussion."""
+    kind = track.get("kind")
+    if kind in ("drum", "melodic"):
+        return kind == "drum"
+    return engine_kind(track.get("engine", "kick")) == "drum"
+
+
 def _channels(tracks):
     """Drums share channel 9; melodic tracks take the rest, skipping it."""
     out, nxt = {}, 0
     for t in tracks:
-        if engine_kind(t.get("engine", "kick")) == "drum":
+        if _is_drum(t):
             out[t["id"]] = 9
         else:
             if nxt == 9:
@@ -97,7 +107,7 @@ def write(data, path, song=False):
     total_notes = 0
     for track in data["tracks"]:
         ch = chans[track["id"]]
-        drum = engine_kind(track.get("engine", "kick")) == "drum"
+        drum = _is_drum(track)
         gm = GM_DRUMS.get(track.get("engine"), 64)
         events = []
 
