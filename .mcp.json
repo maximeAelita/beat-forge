@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "beatforge": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["./beatforge.py", "--mcp"]
+    }
+  }
+}

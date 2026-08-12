@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeatForge</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="gate" class="gate">
+  <div class="gate-inner">
+    <h1>BEAT<span>FORGE</span></h1>
+    <p>Browsers require a click before audio can start.</p>
+    <button id="gate-btn" class="primary big">ENTER STUDIO</button>
+    <p class="hint" id="gate-hint">connecting…</p>
+  </div>
+</div>
+
+<header class="topbar">
+  <div class="brand">BEAT<span>FORGE</span></div>
+
+  <div class="transport">
+    <button id="btn-play" class="primary" title="Space">▶</button>
+    <button id="btn-stop" title="Space">■</button>
+  </div>
+
+  <label class="knob"><span>BPM</span>
+    <input id="bpm" type="number" min="30" max="300" step="1" value="90">
+  </label>
+  <label class="knob wide"><span>SWING</span>
+    <input id="swing" type="range" min="0" max="0.75" step="0.01" value="0">
+    <em id="swing-val">0%</em>
+  </label>
+  <label class="knob wide"><span>MASTER</span>
+    <input id="master" type="range" min="0" max="1.2" step="0.01" value="0.85">
+  </label>
+  <label class="knob"><span>KEY</span>
+    <select id="key"></select>
+  </label>
+  <label class="knob"><span>SCALE</span>
+    <select id="scale"></select>
+  </label>
+
+  <canvas id="scope" width="180" height="34" title="master output"></canvas>
+
+  <div class="spacer"></div>
+
+  <div class="status">
+    <span id="link-dot" class="dot"></span><span id="link-text">offline</span>
+  </div>
+  <button id="btn-export" title="Render the current pattern to a .wav">EXPORT</button>
+  <input id="proj-name" class="proj-name" value="Untitled" spellcheck="false">
+</header>
+
+<section class="patternbar">
+  <span class="label">PATTERNS</span>
+  <div id="pattern-list" class="pattern-list"></div>
+  <button id="pat-add" title="New empty pattern">+</button>
+  <button id="pat-dup" title="Duplicate selected">⧉</button>
+  <button id="pat-del" title="Delete selected">−</button>
+  <span class="sep"></span>
+  <label class="knob"><span>STEPS</span>
+    <select id="pat-steps">
+      <option>8</option><option>12</option><option selected>16</option>
+      <option>24</option><option>32</option><option>48</option><option>64</option>
+    </select>
+  </label>
+  <span class="sep"></span>
+  <label class="check"><input id="song-mode" type="checkbox"> SONG</label>
+  <div id="song-chain" class="song-chain"></div>
+  <button id="song-add" title="Append selected pattern to the song">+CHAIN</button>
+  <button id="song-clear" title="Clear song chain">CLR</button>
+</section>
+
+<main class="studio">
+  <div class="grid-wrap">
+    <div class="grid-head">
+      <div class="head-track">TRACK</div>
+      <div class="head-mix">MIX</div>
+      <div id="ruler" class="ruler"></div>
+    </div>
+    <div id="rows" class="rows">
+      <div id="playhead" class="playhead"></div>
+    </div>
+    <div class="grid-foot">
+      <button id="track-add">+ TRACK</button>
+      <span class="hint">click = toggle · shift+click = velocity · alt+click = roll/slide ·
+        wheel = velocity (pitch on melodic) · drag to paint</span>
+    </div>
+  </div>
+
+  <aside id="inspector" class="inspector">
+    <h2>INSPECTOR</h2>
+    <div id="insp-body" class="insp-body"><p class="hint">Select a track.</p></div>
+  </aside>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script src="audio.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
