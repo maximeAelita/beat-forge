@@ -26,9 +26,9 @@ from . import tools as tools_mod
 from .state import migrate
 
 
-def make_handler(project, root, quiet=True):
-    web_dir = os.path.join(root, "web")
-    export_dir = os.path.join(root, "exports")
+def make_handler(project, res_root, data_root, quiet=True):
+    web_dir = os.path.join(res_root, "web")
+    export_dir = os.path.join(data_root, "exports")
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -199,12 +199,13 @@ def make_handler(project, root, quiet=True):
     return Handler
 
 
-def start(project, root, host="127.0.0.1", port=8787, quiet=True):
+def start(project, res_root, data_root, host="127.0.0.1", port=8787, quiet=True):
     """Bind the web server on the first free port at or after `port`."""
     last = None
     for candidate in range(port, port + 20):
         try:
-            httpd = ThreadingHTTPServer((host, candidate), make_handler(project, root, quiet))
+            httpd = ThreadingHTTPServer(
+                (host, candidate), make_handler(project, res_root, data_root, quiet))
             break
         except OSError as exc:
             last = exc

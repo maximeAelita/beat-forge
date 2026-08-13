@@ -3,4 +3,6 @@ __pycache__/
 projects/_autosave.json
 exports/*.wav
 exports/*.mid
+build/
+dist/
 .DS_Store

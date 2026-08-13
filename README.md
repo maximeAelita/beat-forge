@@ -54,6 +54,26 @@ Claude build the beat in real time.
 If port 8787 is busy it walks up to the next free one; the exact URL is printed
 to stderr and returned by the `bf_ui` tool.
 
+### Building a standalone app
+
+To get a single executable that runs without Python installed:
+
+```bash
+pip install pyinstaller
+python -m PyInstaller BeatForge.spec
+```
+
+That writes `dist/BeatForge.exe` (~9 MB, interpreter included). Double-click it
+and the studio opens in your browser; it stays a console app because the same
+binary serves MCP over stdin/stdout — point Claude at it with
+`BeatForge.exe --mcp`.
+
+Put it wherever you like. The packaged app keeps `projects/` and `exports/`
+**next to the executable**, so the whole studio stays portable; if that folder
+is read-only it falls back to a per-user directory, and `BEATFORGE_HOME`
+overrides both. Run from a checkout, nothing moves — everything stays in the
+project directory as before.
+
 ---
 
 ## The interface
@@ -154,6 +174,8 @@ bell, organ.
 
 ```
 beatforge.py          entry point (--mcp for Claude, plain for you)
+BeatForge.spec        PyInstaller recipe for the standalone build
+bf/paths.py           where assets are read from and your work is written
 bf/state.py           project model, step/note grammar, autosave
 bf/theory.py          scales, chords, progressions
 bf/generators.py      genre grooves, basslines, melodies
