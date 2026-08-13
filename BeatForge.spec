@@ -33,6 +33,7 @@ exe = EXE(
     a.datas,
     [],
     name='BeatForge',
+    icon='assets/BeatForge.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
