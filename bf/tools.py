@@ -340,12 +340,11 @@ TOOLS = [
                             "len": {"type": "integer", "minimum": 1},
                             "slide": {"type": "boolean"},
                             "prob": {"type": "number", "minimum": 0, "maximum": 1},
-                      "nudge": {"type": "number", "minimum": -0.9, "maximum": 0.9,
-                                "description": "Shift this step off the grid, in steps. "
-                                               "0.2 lands it a fifth of a step late -- how a "
-                                               "part is made to drag behind the beat. Negative "
-                                               "pushes ahead. The engine already honoured this; "
-                                               "nothing could set it."},
+                            "nudge": {"type": "number", "minimum": -0.9, "maximum": 0.9,
+                                      "description": "Shift this step off the grid, in steps. "
+                                                     "0.2 lands it a fifth of a step late -- how "
+                                                     "a part is made to drag behind the beat. "
+                                                     "Negative pushes ahead."},
                         },
                         "required": ["step"],
                     },
@@ -1334,6 +1333,10 @@ class ToolRunner(object):
                 out["msg"] = ("automation on %s:\n%s" % (pat["name"], json.dumps(mix, indent=1))
                               if mix else "no automation on %s" % pat["name"])
                 return
+            if not a.get("track"):
+                raise ValueError(
+                    "bf_automate needs a track to set automation on -- pass track='kick', "
+                    "or use action='clear' with no track to clear the whole pattern")
             track = _find_track(data, a["track"])
             entry = mix.setdefault(track["id"], {})
             if a.get("gain") is not None:
