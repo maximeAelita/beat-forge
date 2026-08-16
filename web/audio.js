@@ -11,6 +11,14 @@
 
   function mtof(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 
+  /* Read a synth parameter, falling back only when it is genuinely absent.
+     Writing the fallback as a logical-or looks harmless, but zero is falsy: a
+     drive of 0 silently became 0.3, so the sub808 could never be made clean.
+     The same trap applied to every decay and cutoff default below. */
+  function num(v, dflt) {
+    return (v == null || v !== v) ? dflt : v;
+  }
+
   /* Seeded PRNG (mulberry32). Everything random in the engine draws from this
      stream -- noise playback rate, the reverb impulse, step probability -- and
      the stream is reseeded from the project at the top of every render and
@@ -314,15 +322,15 @@
       var g = ctx.createGain();
       var f = ctx.createBiquadFilter();
       f.type = filterType || 'lowpass';
-      f.Q.value = 0.7 + (p.reso || 0) * 12;
-      var cutoff = Math.min(18000, p.cutoff || 4000);
+      f.Q.value = 0.7 + (num(p.reso, 0)) * 12;
+      var cutoff = Math.min(18000, num(p.cutoff, 4000));
       f.frequency.setValueAtTime(cutoff, t);
       f.frequency.exponentialRampToValueAtTime(Math.max(120, cutoff * 0.35), t + dur);
-      var d = shaper(ctx, p.drive || 0);
+      var d = shaper(ctx, num(p.drive, 0));
       f.connect(g); g.connect(d); d.connect(out);
 
       var attack = 0.005;
-      var release = Math.max(0.05, p.decay || 0.4);
+      var release = Math.max(0.05, num(p.decay, 0.4));
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vel * 0.7), t + attack);
       g.gain.setValueAtTime(Math.max(0.0002, vel * 0.7), t + Math.max(attack, dur * 0.7));
@@ -345,7 +353,7 @@
       var freq = mtof(note == null ? 33 : note);
       var o = ctx.createOscillator(), g = ctx.createGain();
       o.type = 'sine';
-      var glide = p.glide || 0;
+      var glide = num(p.glide, 0);
       if (prev != null && glide > 0.001) {
         o.frequency.setValueAtTime(mtof(prev), t);
         o.frequency.exponentialRampToValueAtTime(freq, t + glide);
@@ -353,13 +361,13 @@
         o.frequency.setValueAtTime(freq * 1.8, t);
         o.frequency.exponentialRampToValueAtTime(freq, t + 0.035);
       }
-      var total = Math.max(0.12, dur + (p.decay || 1));
+      var total = Math.max(0.12, dur + (num(p.decay, 1)));
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vel), t + 0.006);
       g.gain.exponentialRampToValueAtTime(0.0001, t + total);
-      var d = shaper(ctx, p.drive || 0.3);
+      var d = shaper(ctx, num(p.drive, 0.3));
       var lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass'; lp.frequency.value = Math.min(18000, p.cutoff || 900);
+      lp.type = 'lowpass'; lp.frequency.value = Math.min(18000, num(p.cutoff, 900));
       o.connect(g); g.connect(d); d.connect(lp); lp.connect(out);
       o.start(t); o.stop(t + total + 0.05);
     },
@@ -375,22 +383,22 @@
       var freq = mtof(note == null ? 60 : note);
       var o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
       o.type = 'sawtooth'; o.frequency.value = freq;
-      f.type = 'lowpass'; f.Q.value = 1 + (p.reso || 0) * 10;
-      var cut = Math.min(18000, p.cutoff || 4000);
+      f.type = 'lowpass'; f.Q.value = 1 + (num(p.reso, 0)) * 10;
+      var cut = Math.min(18000, num(p.cutoff, 4000));
       f.frequency.setValueAtTime(cut, t);
-      f.frequency.exponentialRampToValueAtTime(Math.max(150, freq * 2), t + (p.decay || 0.35));
-      env(ctx, g, t, 0.003, (p.decay || 0.35) + dur * 0.2, vel * 0.8);
-      var d = shaper(ctx, p.drive || 0);
+      f.frequency.exponentialRampToValueAtTime(Math.max(150, freq * 2), t + (num(p.decay, 0.35)));
+      env(ctx, g, t, 0.003, (num(p.decay, 0.35)) + dur * 0.2, vel * 0.8);
+      var d = shaper(ctx, num(p.drive, 0));
       o.connect(f); f.connect(g); g.connect(d); d.connect(out);
-      o.start(t); o.stop(t + (p.decay || 0.35) + dur + 0.1);
+      o.start(t); o.stop(t + (num(p.decay, 0.35)) + dur + 0.1);
     },
 
     pad: function (ctx, out, t, p, vel, note, dur) {
       var freq = mtof(note == null ? 60 : note);
       var g = ctx.createGain(), f = ctx.createBiquadFilter();
-      f.type = 'lowpass'; f.frequency.value = Math.min(18000, p.cutoff || 3200);
-      f.Q.value = 0.6 + (p.reso || 0) * 4;
-      var atk = Math.min(0.5, 0.08 + dur * 0.15), rel = p.decay || 2;
+      f.type = 'lowpass'; f.frequency.value = Math.min(18000, num(p.cutoff, 3200));
+      f.Q.value = 0.6 + (num(p.reso, 0)) * 4;
+      var atk = Math.min(0.5, 0.08 + dur * 0.15), rel = num(p.decay, 2);
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vel * 0.5), t + atk);
       g.gain.setValueAtTime(Math.max(0.0002, vel * 0.5), t + Math.max(atk, dur * 0.8));
@@ -410,13 +418,13 @@
       car.type = 'sine'; car.frequency.value = freq;
       mod.type = 'sine'; mod.frequency.value = freq * 3.51;
       mg.gain.setValueAtTime(freq * 2.5, t);
-      mg.gain.exponentialRampToValueAtTime(1, t + (p.decay || 1.4));
+      mg.gain.exponentialRampToValueAtTime(1, t + (num(p.decay, 1.4)));
       mod.connect(mg); mg.connect(car.frequency);
-      env(ctx, g, t, 0.002, (p.decay || 1.4) + dur * 0.3, vel * 0.6);
+      env(ctx, g, t, 0.002, (num(p.decay, 1.4)) + dur * 0.3, vel * 0.6);
       car.connect(g); g.connect(out);
       car.start(t); mod.start(t);
-      car.stop(t + (p.decay || 1.4) + dur + 0.2);
-      mod.stop(t + (p.decay || 1.4) + dur + 0.2);
+      car.stop(t + (num(p.decay, 1.4)) + dur + 0.2);
+      mod.stop(t + (num(p.decay, 1.4)) + dur + 0.2);
     }
   };
 
