@@ -340,6 +340,12 @@ TOOLS = [
                             "len": {"type": "integer", "minimum": 1},
                             "slide": {"type": "boolean"},
                             "prob": {"type": "number", "minimum": 0, "maximum": 1},
+                      "nudge": {"type": "number", "minimum": -0.9, "maximum": 0.9,
+                                "description": "Shift this step off the grid, in steps. "
+                                               "0.2 lands it a fifth of a step late -- how a "
+                                               "part is made to drag behind the beat. Negative "
+                                               "pushes ahead. The engine already honoured this; "
+                                               "nothing could set it."},
                         },
                         "required": ["step"],
                     },
@@ -907,6 +913,13 @@ class ToolRunner(object):
                 if e.get("on") is False:
                     row[i] = None
                     continue
+                # An edit carrying only modifiers has nothing to modify on an empty
+                # step, and creating one there is worse than a no-op: a melodic step
+                # with no note plays the engine's default pitch, so nudging or sliding
+                # a whole row silently fills it with notes nobody asked for.
+                if row[i] is None and all(
+                        k in ("step", "nudge", "slide", "prob", "roll", "len") for k in e):
+                    continue
                 step = dict(row[i] or {})
                 step["v"] = float(e.get("velocity", step.get("v", 0.8)))
                 if e.get("note") is not None:
@@ -916,6 +929,8 @@ class ToolRunner(object):
                         step[key] = int(e[key])
                 if e.get("prob") is not None:
                     step["prob"] = float(e["prob"])
+                if e.get("nudge") is not None:
+                    step["nudge"] = float(e["nudge"])
                 if e.get("slide") is not None:
                     if e["slide"]:
                         step["slide"] = True
