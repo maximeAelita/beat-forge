@@ -560,6 +560,31 @@
     }
   }
 
+  /* ---- per-pattern automation --------------------------------------------
+     A pattern may carry `mix`: { trackId: { gain, mute, params: {...} } }.
+     Any value is either a constant or [from, to], swept linearly across the
+     pattern. Sweeping here -- at the step, from the step index -- rather than on
+     an AudioParam means a filter sweep or fade behaves identically live and
+     offline and needs no graph surgery, at the cost of being stepwise rather
+     than sample-accurate. At 16 steps a bar that is finer than the ear needs. */
+  function rampAt(v, pos) {
+    return (v instanceof Array) ? v[0] + (v[1] - v[0]) * pos : v;
+  }
+
+  function patternMix(pattern, trackId, index) {
+    var mx = pattern.mix && pattern.mix[trackId];
+    if (!mx) return null;
+    var pos = Math.min(1, Math.max(0, index / Math.max(1, (pattern.steps || 16) - 1)));
+    var out = { gain: mx.gain == null ? 1 : rampAt(mx.gain, pos), mute: !!mx.mute, params: null };
+    if (mx.params) {
+      out.params = {};
+      for (var k in mx.params) {
+        if (mx.params.hasOwnProperty(k)) out.params[k] = rampAt(mx.params[k], pos);
+      }
+    }
+    return out;
+  }
+
   /* Schedule one step of one pattern. `chains` maps track id -> input node. */
   function scheduleStep(ctx, graph, state, chains, pattern, index, time, lastNote) {
     var sd = stepDur(state.bpm);
@@ -580,6 +605,8 @@
 
       var dest = chains[track.id];
       if (!dest) continue;
+      var mix = patternMix(pattern, track.id, index);
+      if (mix && mix.mute) continue;
       if (track.id === (state.duckSource || 'kick')) fireDuck(graph, state, t);
       var voice = Voices[track.engine] || Voices.perc;
       var isMelodic = MELODIC.indexOf(track.engine) >= 0;
@@ -587,7 +614,24 @@
       var vel = Math.max(0.02, Math.min(1, step.v == null ? 0.8 : step.v));
       var rolls = step.roll && step.roll > 1 ? step.roll : 1;
 
-      var decay = track.params.decay == null ? 1 : track.params.decay;
+      var params = track.params;
+      if (mix) {
+        if (mix.params) {
+          params = {};
+          for (var bk in track.params) {
+            if (track.params.hasOwnProperty(bk)) params[bk] = track.params[bk];
+          }
+          for (var ok in mix.params) {
+            if (mix.params.hasOwnProperty(ok)) params[ok] = mix.params[ok];
+          }
+        }
+        /* Scaling the note rather than the track fader keeps the reverb and
+           delay sends in proportion and leaves notes already ringing from the
+           previous pattern alone -- which is what a section change should do. */
+        vel = Math.max(0.001, Math.min(1, vel * mix.gain));
+      }
+
+      var decay = params.decay == null ? 1 : params.decay;
       var life = dur + decay * 2 + 0.5;
 
       for (var r = 0; r < rolls; r++) {
@@ -598,7 +642,7 @@
         for (var ni = 0; ni < notes.length; ni++) {
           var prev = step.slide ? lastNote[track.id] : null;
           try {
-            voice(ctx, bus, rt, track.params, rv / Math.sqrt(notes.length),
+            voice(ctx, bus, rt, params, rv / Math.sqrt(notes.length),
               notes[ni], isMelodic ? dur / rolls : dur, prev);
           } catch (e) { /* one bad voice must not stop the transport */ }
         }
@@ -792,6 +836,105 @@
     });
   };
 
+  /* ---- offline analysis ---------------------------------------------------
+     Whoever is driving these tools may not be able to hear the render -- an
+     agent writing patterns over MCP certainly cannot -- so the render has to be
+     able to report on itself. The DSP is done by hand on the rendered samples
+     rather than through Web Audio nodes, so a measurement is deterministic and
+     independent of whatever the graph happens to be doing. */
+  function monoSum(buffer) {
+    var n = buffer.length, ch = buffer.numberOfChannels, out = new Float32Array(n);
+    for (var c = 0; c < ch; c++) {
+      var d = buffer.getChannelData(c);
+      for (var i = 0; i < n; i++) out[i] += d[i] / ch;
+    }
+    return out;
+  }
+
+  function biquad(x, b0, b1, b2, a1, a2) {
+    var y = new Float32Array(x.length), x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (var i = 0; i < x.length; i++) {
+      var o = b0 * x[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+      y[i] = o; x2 = x1; x1 = x[i]; y2 = y1; y1 = o;
+    }
+    return y;
+  }
+
+  function lowpass(x, sr, fc) {
+    var w = 2 * Math.PI * fc / sr, c = Math.cos(w), al = Math.sin(w) / 1.414, a0 = 1 + al;
+    return biquad(x, (1 - c) / 2 / a0, (1 - c) / a0, (1 - c) / 2 / a0, -2 * c / a0, (1 - al) / a0);
+  }
+
+  function highpass(x, sr, fc) {
+    var w = 2 * Math.PI * fc / sr, c = Math.cos(w), al = Math.sin(w) / 1.414, a0 = 1 + al;
+    return biquad(x, (1 + c) / 2 / a0, -(1 + c) / a0, (1 + c) / 2 / a0, -2 * c / a0, (1 - al) / a0);
+  }
+
+  function db(v) { return 20 * Math.log10(Math.max(1e-9, v)); }
+
+  function rmsOf(x, from, to) {
+    from = Math.max(0, from | 0); to = Math.min(x.length, to | 0);
+    if (to <= from) return 0;
+    var s = 0;
+    for (var i = from; i < to; i++) s += x[i] * x[i];
+    return Math.sqrt(s / (to - from));
+  }
+
+  /* Goertzel: the level of one exact frequency over one window. Cheaper than an
+     FFT and it answers the question actually being asked -- "is the note that
+     should be at 32.7 Hz here, and how loud". */
+  function toneDb(x, sr, freq, from, to) {
+    from = Math.max(0, from | 0); to = Math.min(x.length, to | 0);
+    var n = to - from;
+    if (n <= 1) return -Infinity;
+    var k = 2 * Math.cos(2 * Math.PI * freq / sr), s1 = 0, s2 = 0;
+    for (var i = from; i < to; i++) { var s0 = x[i] + k * s1 - s2; s2 = s1; s1 = s0; }
+    return db(Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - k * s1 * s2)) / n * 2);
+  }
+
+  function analyze(buffer, opts) {
+    opts = opts || {};
+    var sr = buffer.sampleRate, x = monoSum(buffer), n = x.length;
+    /* Peak and clipping are per channel, not off the mono sum: a hard-panned
+       hit can pin one channel while the sum still reads comfortable. Levels and
+       bands stay on the sum, where a mono view is the useful one. */
+    var peak = 0, clipped = 0;
+    for (var c = 0; c < buffer.numberOfChannels; c++) {
+      var d = buffer.getChannelData(c);
+      for (var i = 0; i < n; i++) {
+        var a = Math.abs(d[i]);
+        if (a > peak) peak = a;
+        if (a >= 0.997) clipped++;
+      }
+    }
+    var edges = opts.bands || [80, 200, 2000];
+    var bands = [], prev = 0, k;
+    for (k = 0; k <= edges.length; k++) {
+      var lo = prev, hi = k < edges.length ? edges[k] : null;
+      var seg = x;
+      if (hi) seg = lowpass(seg, sr, hi);
+      if (lo) seg = highpass(seg, sr, lo);
+      bands.push({ from: lo, to: hi, rms: db(rmsOf(seg, 0, n)) });
+      prev = hi;
+    }
+    var slice = opts.slice || 5, timeline = [];
+    for (var t = 0; t < n / sr; t += slice) {
+      timeline.push({ t: Math.round(t * 100) / 100,
+                      rms: db(rmsOf(x, t * sr, (t + slice) * sr)) });
+    }
+    var probes = [];
+    (opts.probes || []).forEach(function (p) {
+      var w = (p.window == null ? 0.3 : p.window) * sr;
+      probes.push({ t: p.t, freq: p.freq,
+                    level: toneDb(x, sr, p.freq, p.t * sr, p.t * sr + w) });
+    });
+    return {
+      seconds: Math.round(n / sr * 1000) / 1000, sampleRate: sr,
+      peak: db(peak), peakPct: peak * 100, clipped: clipped,
+      rms: db(rmsOf(x, 0, n)), bands: bands, timeline: timeline, probes: probes
+    };
+  }
+
   // ---- wav encoding --------------------------------------------------------
   function encodeWav(buffer) {
     var chans = buffer.numberOfChannels, len = buffer.length;
@@ -818,6 +961,7 @@
   }
 
   global.BeatForgeAudio = {
-    Engine: Engine, Voices: Voices, MELODIC: MELODIC, mtof: mtof, encodeWav: encodeWav
+    Engine: Engine, Voices: Voices, MELODIC: MELODIC, mtof: mtof, encodeWav: encodeWav,
+    analyze: analyze
   };
 })(window);

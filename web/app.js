@@ -85,6 +85,7 @@
     else if (c.cmd === 'stop') { engine.stop(); syncPlayButton(); }
     else if (c.cmd === 'reload') { location.reload(); }
     else if (c.cmd === 'export') { doExport(c); }
+    else if (c.cmd === 'analyze') { doAnalyze(c); }
   }
 
   // -------------------------------------------------------------- render ----
@@ -536,6 +537,38 @@
     }).catch(function (err) {
       toast('export failed: ' + err.message, 5000);
       fetch('/api/export', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job: cmd.job, error: String(err && err.message || err) })
+      });
+    });
+  }
+
+  /* Same offline render as the export, but instead of shipping ten megabytes of
+     WAV back it measures the buffer here and returns a few hundred bytes. */
+  function doAnalyze(cmd) {
+    if (!started) {
+      fetch('/api/analyze', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job: cmd.job, error: 'audio not started — click ENTER STUDIO in the BeatForge tab first' })
+      });
+      return;
+    }
+    toast('analysing…', 8000);
+    engine.setState(S);
+    engine.ensure();
+    engine.render({
+      repeats: cmd.repeats || 2, song: !!cmd.song, tail: cmd.tail == null ? 1.5 : cmd.tail
+    }).then(function (res) {
+      var report = BeatForgeAudio.analyze(res.buffer, cmd);
+      return fetch('/api/analyze', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job: cmd.job, report: report })
+      });
+    }).then(function () {
+      toast('analysed');
+    }).catch(function (err) {
+      toast('analysis failed: ' + err.message, 5000);
+      fetch('/api/analyze', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ job: cmd.job, error: String(err && err.message || err) })
       });

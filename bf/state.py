@@ -494,6 +494,12 @@ def migrate(data):
         for tid in list(grid):
             if tid not in known:
                 del grid[tid]
+        # Per-pattern automation overrides, keyed like the grid so a deleted
+        # track cannot leave an override behind that nothing can reach.
+        mix = p.setdefault("mix", {})
+        for tid in list(mix):
+            if tid not in known:
+                del mix[tid]
     data["current"] = max(0, min(int(data.get("current", 0)), len(data["patterns"]) - 1))
     return data
 

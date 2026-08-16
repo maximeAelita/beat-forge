@@ -22,6 +22,7 @@ from .state import (ALL_ENGINES, DRUM_ENGINES, MELODIC_ENGINES, engine_kind,
 MAX_STEPS = 128
 
 _export_waiters = {}
+_analyze_waiters = {}
 _export_lock = threading.Lock()
 
 
@@ -589,6 +590,70 @@ TOOLS = [
                            "default": "undo"},
                 "steps": {"type": "integer", "minimum": 1, "default": 1,
                           "description": "How many edits to walk back."},
+            },
+        },
+    },
+    {
+        "name": "bf_analyze",
+        "description": (
+            "Measure the rendered audio without writing a file: peak, clipping, overall "
+            "and per-band levels, a level-over-time curve, and the level of specific "
+            "frequencies at specific moments. Use it to answer questions you cannot "
+            "answer by looking at the grid -- is the mix clipping, is the bass masking "
+            "the kick, does the drop actually get louder, is that 32.7 Hz note audible. "
+            "Renders the same way bf_export_audio does, so it needs the browser open."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "song": {"type": "boolean", "default": False,
+                         "description": "Analyse the whole song chain instead of one pattern."},
+                "repeats": {"type": "integer", "minimum": 1, "default": 2},
+                "tail": {"type": "number", "default": 1.5},
+                "slice": {"type": "number", "default": 5,
+                          "description": "Seconds per point on the level-over-time curve."},
+                "bands": {"type": "array", "items": {"type": "number"},
+                          "description": "Band edges in Hz. Default [80, 200, 2000] gives "
+                                         "sub / low / mid / high."},
+                "probes": {
+                    "type": "array",
+                    "description": "Measure one exact frequency at one moment, e.g. "
+                                   "[{\"t\":3.9,\"freq\":43.65}] to check an F1 landed.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "t": {"type": "number", "description": "Seconds into the render."},
+                            "freq": {"type": "number", "description": "Frequency in Hz."},
+                            "window": {"type": "number", "default": 0.3},
+                        },
+                        "required": ["t", "freq"],
+                    },
+                },
+                "timeout": {"type": "number", "default": 300},
+            },
+        },
+    },
+    {
+        "name": "bf_automate",
+        "description": (
+            "Per-pattern automation: override a track's gain, mute or synth parameters "
+            "for one pattern only, leaving the track's own settings alone. Every value is "
+            "either a constant, or [from, to] to sweep it across the pattern -- so "
+            "{\"params\":{\"cutoff\":[400,6000]}} is a filter sweep and {\"gain\":[0,1]} "
+            "is a fade in. This is how a section gets its own sound without a second track."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["set", "clear", "list"], "default": "set"},
+                "pattern": {"description": "Pattern index or name; defaults to selected."},
+                "track": {"type": "string",
+                          "description": "Track id. Omit with action='clear' to clear the "
+                                         "whole pattern."},
+                "gain": {"description": "Level multiplier for this pattern: 0.5, or [0,1] "
+                                        "to fade in across it."},
+                "mute": {"type": "boolean", "description": "Silence this track for this pattern."},
+                "params": {"type": "object",
+                           "description": "Engine knob overrides, each a number or [from, to], "
+                                          "e.g. {\"cutoff\": [400, 6000], \"drive\": 0.8}."},
             },
         },
     },
@@ -1204,6 +1269,70 @@ class ToolRunner(object):
             raise ValueError("browser reported: %s" % info["error"])
         return "exported %s (%.1f KB)" % (info["path"], info.get("bytes", 0) / 1024.0)
 
+    def _bf_analyze(self, a):
+        if not self.proj._listeners:
+            raise ValueError(
+                "no browser connected -- open %s first, the UI does the rendering"
+                % self.url)
+        job = "analyze-%d" % (int(time.time() * 1000) % 100000)
+        ev = threading.Event()
+        with _export_lock:
+            _analyze_waiters[job] = {"event": ev, "report": None, "error": None}
+        cmd = {
+            "cmd": "analyze", "job": job,
+            "repeats": int(a.get("repeats", 2)), "song": bool(a.get("song", False)),
+            "tail": float(a.get("tail", 1.5)),
+            "slice": float(a.get("slice", 5)),
+        }
+        if a.get("bands"):
+            cmd["bands"] = [float(b) for b in a["bands"]]
+        if a.get("probes"):
+            cmd["probes"] = [{"t": float(p["t"]), "freq": float(p["freq"]),
+                              "window": float(p.get("window", 0.3))} for p in a["probes"]]
+        self.proj.push_command(cmd)
+        timeout = float(a.get("timeout", 300))
+        if not ev.wait(timeout):
+            with _export_lock:
+                _analyze_waiters.pop(job, None)
+            raise ValueError("analysis timed out after %gs" % timeout)
+        with _export_lock:
+            info = _analyze_waiters.pop(job, {})
+        if info.get("error"):
+            raise ValueError("browser reported: %s" % info["error"])
+        return _format_analysis(info["report"])
+
+    def _bf_automate(self, a):
+        out = {}
+
+        def fn(data):
+            pat, _ = _resolve_pattern(self.proj, data, a.get("pattern"))
+            mix = pat.setdefault("mix", {})
+            action = a.get("action") or "set"
+            if action == "clear":
+                if a.get("track"):
+                    mix.pop(_find_track(data, a["track"])["id"], None)
+                else:
+                    pat["mix"] = {}
+                out["msg"] = "cleared automation on %s" % pat["name"]
+                return
+            if action == "list":
+                out["msg"] = ("automation on %s:\n%s" % (pat["name"], json.dumps(mix, indent=1))
+                              if mix else "no automation on %s" % pat["name"])
+                return
+            track = _find_track(data, a["track"])
+            entry = mix.setdefault(track["id"], {})
+            if a.get("gain") is not None:
+                entry["gain"] = _ramp_value(a["gain"])
+            if a.get("mute") is not None:
+                entry["mute"] = bool(a["mute"])
+            if a.get("params"):
+                p = entry.setdefault("params", {})
+                for k, v in a["params"].items():
+                    p[k] = _ramp_value(v)
+            out["msg"] = "%s on %s: %s" % (track["id"], pat["name"], json.dumps(entry))
+        self.proj.mutate(fn)
+        return out["msg"]
+
     def _bf_export_midi(self, a):
         data = self.proj.snapshot()
         name = a.get("filename") or data["name"]
@@ -1321,6 +1450,53 @@ def _transform_row(row, op, amt, n, rng):
                 row[i], row[j] = row[j], row[i]
         return row
     raise ValueError("unknown op %r" % op)
+
+
+def _ramp_value(v):
+    """A parameter override is a constant, or [from, to] swept over the pattern."""
+    if isinstance(v, (list, tuple)):
+        if len(v) != 2:
+            raise ValueError("a ramp must be [from, to], got %r" % (v,))
+        return [float(v[0]), float(v[1])]
+    return float(v)
+
+
+def _format_analysis(r):
+    if not r:
+        return "no report returned"
+    lines = ["%.3f s at %d Hz" % (r["seconds"], r["sampleRate"]),
+             "peak %.1f dBFS (%.1f%% FS)   clipped samples %d   overall %.1f dBFS RMS"
+             % (r["peak"], r["peakPct"], r["clipped"], r["rms"])]
+    lines.append("")
+    lines.append("bands:")
+    for b in r["bands"]:
+        lo, hi = b["from"], b["to"]
+        label = ("below %g Hz" % hi if not lo else
+                 "%g Hz and up" % lo if not hi else "%g-%g Hz" % (lo, hi))
+        lines.append("  %-16s %7.1f dBFS" % (label, b["rms"]))
+    if r.get("timeline"):
+        lines.append("")
+        lines.append("level over time:")
+        for s in r["timeline"]:
+            bar = "#" * max(0, int((s["rms"] + 40) / 1.5))
+            lines.append("  %6.1fs %7.1f dBFS  %s" % (s["t"], s["rms"], bar))
+    if r.get("probes"):
+        lines.append("")
+        lines.append("frequency probes:")
+        for p in r["probes"]:
+            lines.append("  %6.2fs %8.2f Hz %7.1f dBFS" % (p["t"], p["freq"], p["level"]))
+    return "\n".join(lines)
+
+
+def complete_analyze(job, report, error=None):
+    with _export_lock:
+        info = _analyze_waiters.get(job)
+        if not info:
+            return False
+        info["report"] = report
+        info["error"] = error
+        info["event"].set()
+    return True
 
 
 def complete_export(job, path, nbytes, error=None):

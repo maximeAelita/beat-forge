@@ -131,6 +131,12 @@ def make_handler(project, res_root, data_root, quiet=True):
                             "rev": project.snapshot()["rev"]})
                 return
 
+            if path == "/api/analyze":
+                job = body.get("job")
+                tools_mod.complete_analyze(job, body.get("report"), body.get("error"))
+                self._json({"ok": True})
+                return
+
             if path == "/api/export":
                 job = body.get("job")
                 if body.get("error"):
